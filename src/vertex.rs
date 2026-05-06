@@ -17,30 +17,12 @@ pub struct Vertex {
     pub _padding: f32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TriangulationType {
     Fan,
     Strip,
     MaxArea,
-}
-
-impl TriangulationType {
-    pub fn next(&mut self) {
-        match self {
-            Self::Fan => *self = Self::Strip,
-            Self::Strip => *self = Self::MaxArea,
-            Self::MaxArea => *self = Self::Fan,
-        }
-    }
-}
-
-pub fn generate_circle(triangulation_type: &TriangulationType, num_points: usize, radius: f32) -> (Vec<Vertex>, Vec<u32>) {
-    let triangulation = match triangulation_type {
-        TriangulationType::Fan => generate_circle_type_one(radius, num_points),
-        TriangulationType::Strip => generate_circle_type_two(radius, num_points),
-        TriangulationType::MaxArea => generate_circle_type_three(radius, num_points),
-    };
-    triangulation
+    Random,
 }
 
 #[cfg(not(target_arch = "wasm32"))]

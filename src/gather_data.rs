@@ -1,5 +1,8 @@
 use std::fs::{read_to_string, write};
 
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
 use rfd::FileHandle;
 use serde::{ser::SerializeStruct, Serialize, Serializer};
 
@@ -51,6 +54,7 @@ impl Serialize for InformationGathered {
             TriangulationType::Fan => "TriangulationType::Fan",
             TriangulationType::Strip => "TriangulationType::Strip",
             TriangulationType::MaxArea => "TriangulationType::MaxArea",
+            TriangulationType::Random => "TriangulationType::Random",
         };
         state.serialize_field("triangulation_type", t)?;
         state.serialize_field("num_vertices", &self.num_vertices)?;
@@ -87,43 +91,24 @@ impl InformationGathered {
     }
 }
 
-
-pub enum DataGatherType {
-    ChangeNumVertices,
-    #[cfg(not(target_arch = "wasm32"))]
-    AdditionalRandomTriangulationsWithStaticVertexCount(usize),
-    TriangulationsFromFile(FileHandle),
-}
-
 pub struct GatherData {
     timer: Option<std::time::Instant>,
-    file_handle: rfd::FileHandle,
     gathered_data: Vec::<InformationGathered>,
     current_information_gathered: InformationGathered,
     stage: DataCollectionStage,
-    data_gather_type: DataGatherType,
-    num_random_done: usize,
+    current_triangulation: usize,
 }
 
 impl GatherData {
-    pub fn new(state: &mut State, data_gather_type: DataGatherType) -> Self {
+    pub fn new(state: &mut State) -> Self {
         state.reset_to_default_triangulation();
-
-        todo!("Find out what to do with with \"files\"");
-        // if let DataGatherType::TriangulationsFromFile(p) = &data_gather_type {
-        //     let data = String::from_utf8_lossy(&pollster::block_on(p.read()));//.expect("Could not open file to read triangulation from!");
-        //     let triangulations: Vec<(Vec<Vertex>, Vec<u32>)> = serde_json::from_str(&data).expect("Could not deserialize the triangulation data from the file!");
-        //     state.set_triangulation(TriangulationType::FromVec(p.clone(), triangulations.len()-1));
-        // }
 
         Self {
             timer: None,
-            file_handle: pollster::block_on(rfd::AsyncFileDialog::new().set_file_name("data.csv").save_file()).unwrap(),
             gathered_data: Vec::new(),
             current_information_gathered: InformationGathered::new(state),
             stage: DataCollectionStage::Inactive,
-            data_gather_type,
-            num_random_done: 0,
+            current_triangulation: 0,
         }
     }
 
@@ -137,6 +122,7 @@ impl GatherData {
                     if timer.elapsed().as_millis() >= WARMUP_MS {
                         self.stage = DataCollectionStage::Active;
                         self.timer = None;
+                        state.set_triangulation(0);
                     }
                 } else {
                     self.timer = Some(std::time::Instant::now());
@@ -147,17 +133,12 @@ impl GatherData {
                     self.current_information_gathered.num_frames += 1;
                     let elapsed_ms = timer.elapsed().as_millis();
                     if elapsed_ms >= DATA_GATHER_MS {
-                        let mut finished = false;
                         self.stage = DataCollectionStage::Inactive;
                         self.timer = None;
 
                         self.current_information_gathered.total_time_ms = elapsed_ms;
 
-                        match self.data_gather_type {
-                            DataGatherType::ChangeNumVertices => self.update_change_num_vertices(state, &mut finished),
-                            DataGatherType::AdditionalRandomTriangulationsWithStaticVertexCount(x) => self.update_random_triangulation(state, x, &mut finished),
-                            DataGatherType::TriangulationsFromFile(_) => self.update_triangulation_from_file(state, &mut finished),
-                        }
+                        let finished = state.next_triangulation();
 
                         let mut data = InformationGathered::new(state);
 
@@ -169,10 +150,22 @@ impl GatherData {
                             self.gathered_data.iter().for_each(|d| {
                                 wtr.serialize(d).unwrap();
                             });
-                            if let Err(e) = pollster::block_on(self.file_handle.write(&wtr.into_inner().unwrap())) {
-                                eprintln!("Failed to write csv data to file because: {e}")
+                            let data = wtr.into_inner().unwrap();
+                            #[cfg(not(target_arch = "wasm32"))]
+                            {
+                                rfd::FileDialog::new().save_file().and_then(|p| write(p, data).ok()).unwrap();
                             }
-                            println!("Finished data gathering and saved to file!");
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                wasm_bindgen_futures::spawn_local(
+                                    async move {
+                                        use rfd::AsyncFileDialog;
+
+                                        let file_handle = AsyncFileDialog::new().save_file().await.unwrap_throw();
+                                        file_handle.write(&data).await.unwrap_throw();
+                                    }
+                                )
+                            }
                         }
                     }
                 } else {
@@ -181,41 +174,5 @@ impl GatherData {
             },
             DataCollectionStage::Finished => (),
         }
-    }
-
-    fn update_triangulation_from_file(&mut self, state: &mut State, finished: &mut bool) {
-        match state.get_triangulation_type() {
-            TriangulationType::Fan => (),
-            TriangulationType::Strip => (),
-            TriangulationType::MaxArea => (),
-        }
-        state.change_to_next_triangulation();
-    }
-
-    fn update_random_triangulation(&mut self, state: &mut State, max_num_random: usize, finished: &mut bool) {
-        let next_triangulation = match state.get_triangulation_type() {
-            TriangulationType::Fan => TriangulationType::Strip,
-            TriangulationType::Strip => TriangulationType::MaxArea,
-            TriangulationType::MaxArea => {
-                        TriangulationType::Fan
-                    },
-        };
-        state.set_triangulation(next_triangulation);
-    }
-
-    fn update_change_num_vertices(&mut self, state: &mut State, finished: &mut bool) {
-        match state.get_triangulation_type() {
-            TriangulationType::Fan => (),
-            TriangulationType::Strip => (),
-            TriangulationType::MaxArea => {
-                        if state.get_next_num_vertices() < MAX_VERTEX_NUM {
-                            state.step_up_num_vertices();
-                        } else {
-                            self.stage = DataCollectionStage::Finished;
-                            *finished = true;
-                        }
-                    },
-        }
-        state.change_to_next_triangulation();
     }
 }

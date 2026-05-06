@@ -1,38 +1,20 @@
 use std::sync::Arc;
 
+use log::info;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 use wgpu::util::DeviceExt;
 #[cfg(target_arch = "wasm32")]
 use winit::platform::web::EventLoopExtWebSys;
-use winit::{application::ApplicationHandler, event::{KeyEvent, WindowEvent}, event_loop::EventLoop, keyboard::{KeyCode, PhysicalKey}, window::Window};
+use winit::{application::ApplicationHandler, dpi::PhysicalSize, event::{KeyEvent, WindowEvent}, event_loop::EventLoop, keyboard::{KeyCode, PhysicalKey}, window::Window};
 
-use crate::{gather_data::{DataGatherType, GatherData}, metrics::{TriangulationStatistics, get_triangulation_statistics}, vertex::{TriangulationType, Vertex, generate_circle}};
+use crate::{gather_data::GatherData, metrics::{TriangulationStatistics, get_triangulation_statistics}, vertex::{TriangulationType, Vertex}};
 
 pub mod gather_data;
 pub mod metrics;
 pub mod vertex;
 
 // Initial setup was done through the learn-wgpu tutorial on: https://sotrh.github.io/learn-wgpu/
-
-const DEFAULT_TRIANGULATION: (NumVerticesCalculator, u32, TriangulationType) = (NumVerticesCalculator::Power(3), 5, TriangulationType::Fan);
-
-#[derive(Clone, Copy, Debug)]
-pub enum NumVerticesCalculator {
-    Power(usize),
-    Multiplicative(usize),
-    Static(usize),
-}
-
-impl NumVerticesCalculator {
-    pub fn get_num_vertices(&self, value: u32) -> usize {
-        match self {
-            Self::Power(x) => x.pow(value),
-            Self::Multiplicative(x) => x * value as usize,
-            Self::Static(x) => *x,
-        }
-    }
-}
 
 pub struct State {
     window: Arc<Window>,
@@ -42,48 +24,63 @@ pub struct State {
     queue: wgpu::Queue,
     size: winit::dpi::PhysicalSize<u32>,
     surface: wgpu::Surface<'static>,
-    surface_format: wgpu::TextureFormat,
+    surface_config: wgpu::SurfaceConfiguration,
+    is_surface_configured: bool,
     render_pipeline_layout: wgpu::PipelineLayout,
     render_pipeline: wgpu::RenderPipeline,
     shader: wgpu::ShaderModule,
     vertex_buffer: wgpu::Buffer,
     index_buffer: (wgpu::Buffer, u32),
-    num_vertex_calculator: NumVerticesCalculator,
-    num_vertex_calculator_value: u32,
-    current_triangulation: TriangulationType,
     current_triangulation_stats: TriangulationStatistics,
+    triangulations: Vec<(TriangulationType, Vec<Vertex>, Vec<u32>)>,
+    current_triangulation_index: usize,
 }
 
 impl State {
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
-        let size = window.inner_size();
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             #[cfg(not(target_arch = "wasm32"))]
             backends: wgpu::Backends::PRIMARY,
             #[cfg(target_arch = "wasm32")]
             backends: wgpu::Backends::GL,
-            ..Default::default()
+            flags: Default::default(),
+            memory_budget_thresholds: Default::default(),
+            backend_options: Default::default(),
         });
+
+        let size = window.inner_size();
+
+        if size.width <= 0 && size.height <= 0 {
+            panic!("Window size is 0");
+        }
+
+        let surface = instance.create_surface(window.clone())?;
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
-                ..Default::default()
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
             })
-            .await
-            .unwrap();
+            .await?;
         let adapter_info = adapter.get_info();
-        println!("Using device {:?}", adapter_info.name);
+        info!("Using device {:?}", adapter_info.name);
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
-                required_features: wgpu::Features::from_name("POLYGON_MODE_LINE").unwrap(),
-                ..Default::default()
+                label: None,
+                required_features: wgpu::Features::empty(),//::from_name("POLYGON_MODE_LINE").unwrap(),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                required_limits: if cfg!(target_arch = "wasm32") {
+                    wgpu::Limits::downlevel_webgl2_defaults()
+                } else {
+                    wgpu::Limits::default()
+                },
+                memory_hints: Default::default(),
+                trace: wgpu::Trace::Off,
             })
-            .await
-            .unwrap();
+            .await?;
 
-        let size = window.inner_size();
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
@@ -96,11 +93,14 @@ impl State {
             ..Default::default()
         });
 
-        let (surface, surface_format, render_pipeline) = Self::get_pipeline(&instance, window.clone(), &adapter, &device, &render_pipeline_layout, &shader);
+        let (surface_config, render_pipeline) = Self::get_pipeline(&size, &surface, &adapter, &device, &render_pipeline_layout, &shader);
 
-        let (num_vertex_calculator, num_vertex_calculator_value, current_triangulation) = Self::get_default_triangulation();
-
-        let (vertices, mut indices) = generate_circle(&current_triangulation, Self::calculate_num_vertices(num_vertex_calculator, num_vertex_calculator_value), Self::get_radius());
+        let bin_data = include_bytes!("fan_stripe_max_area.bin");
+        let mut data: Vec<(TriangulationType, Vec<Vertex>, Vec<u32>)> = postcard::from_bytes(bin_data).unwrap();
+        let bin_data = include_bytes!("random_triangulations_262_144.bin");
+        let mut data_2: Vec<(TriangulationType, Vec<Vertex>, Vec<u32>)> = postcard::from_bytes(bin_data).unwrap();
+        data.append(&mut data_2);
+        let (_, vertices, mut indices) = data[0].clone();
         indices.reverse();
 
         let current_triangulation_stats = get_triangulation_statistics(&vertices, &indices);
@@ -123,36 +123,44 @@ impl State {
             queue,
             size,
             surface,
-            surface_format,
             render_pipeline,
             vertex_buffer,
             index_buffer: (index_buffer, indices.len() as u32),
-            num_vertex_calculator_value,
-            current_triangulation: TriangulationType::Fan,
             instance,
             adapter,
             shader,
             render_pipeline_layout,
             current_triangulation_stats,
-            num_vertex_calculator,
+            triangulations: data,
+            current_triangulation_index: 0,
+            surface_config,
+            is_surface_configured: false,
         };
-
-        state.configure_surface();
 
         Ok(state)
     }
 
     fn get_pipeline<'a>(
-        instance: &wgpu::Instance,
-        window: Arc<Window>,
+        size: &PhysicalSize<u32>,
+        surface: &wgpu::Surface<'a>,
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,
         render_pipeline_layout: &wgpu::PipelineLayout,
         shader: &wgpu::ShaderModule,
-    ) -> (wgpu::Surface<'a>, wgpu::TextureFormat, wgpu::RenderPipeline) {
-        let surface = instance.create_surface(window.clone()).unwrap();
-        let cap = surface.get_capabilities(&adapter);
-        let surface_format = cap.formats[0];
+    ) -> (wgpu::SurfaceConfiguration, wgpu::RenderPipeline) {
+        let caps = surface.get_capabilities(&adapter);
+        let surface_format = caps.formats.iter().find(|f| f.is_srgb()).copied().unwrap_or(caps.formats[0]);
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            width: size.width,
+            height: size.height,
+            present_mode: wgpu::PresentMode::AutoNoVsync,
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(device, &config);
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
@@ -182,7 +190,7 @@ impl State {
                 cull_mode: None,//Some(wgpu::Face::Back),
                 // Requires Features::DEPTH_CLIP_CONTROL
                 unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Line,
+                polygon_mode: wgpu::PolygonMode::Fill,
                 // Requires Features::CONSERVATIVE_RASTERIZATION
                 conservative: false,
             },
@@ -208,51 +216,51 @@ impl State {
             multiview_mask: None,
         });
 
-        (surface, surface_format, render_pipeline)
+        (config, render_pipeline)
     }
 
     fn recreate_pipeline(&mut self) {
-        let (surface, surface_format, render_pipeline) = Self::get_pipeline(&self.instance, self.window.clone(), &self.adapter, &self.device, &self.render_pipeline_layout, &self.shader);
+        let surface = self.instance.create_surface(self.window.clone()).unwrap();
+        let (surface_config, render_pipeline) = Self::get_pipeline(&self.window.inner_size(), &surface, &self.adapter, &self.device, &self.render_pipeline_layout, &self.shader);
         self.surface = surface;
-        self.surface_format = surface_format;
+        self.surface_config = surface_config;
         self.render_pipeline = render_pipeline;
         self.size = self.window.inner_size();
-        self.configure_surface();
+        self.is_surface_configured = false;
     }
 
     pub fn get_window(&self) -> &Window {
         &self.window
     }
 
-    pub fn configure_surface(&self) {
-        let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: self.surface_format,
-            view_formats: vec![self.surface_format.add_srgb_suffix()],
-            alpha_mode: wgpu::CompositeAlphaMode::Auto,
-            width: self.size.width,
-            height: self.size.height,
-            desired_maximum_frame_latency: 2,
-            present_mode: wgpu::PresentMode::Immediate,
-        };
-        self.surface.configure(&self.device, &surface_config);
-    }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         self.size = new_size;
 
-        self.configure_surface();
+        if new_size.width > 0 && new_size.height > 0 {
+            self.surface_config.width = new_size.width;
+            self.surface_config.height = new_size.height;
+            self.surface.configure(&self.device, &self.surface_config);
+            self.is_surface_configured = true;
+        }
+
     }
 
     pub fn render(&mut self) {
+        self.window.request_redraw();
+
+        if !self.is_surface_configured {
+            return;
+        }
+
         let surface_texture = match self.surface.get_current_texture() {
             Ok(frame) => frame,
             Err(wgpu::SurfaceError::Lost) => {
-                self.configure_surface();
+                self.surface.configure(&self.device, &self.surface_config);
                 self.surface.get_current_texture().expect("Failed to get the next swap chain texture!")
             },
             Err(wgpu::SurfaceError::Outdated) => {
-                self.configure_surface();
+                self.surface.configure(&self.device, &self.surface_config);
                 self.surface.get_current_texture().expect("Failed to get the next swap chain texture!")
             }
             Err(e) => panic!("Failed to get next swap chain texture: {e}"),
@@ -262,7 +270,7 @@ impl State {
             .create_view(&wgpu::TextureViewDescriptor {
                 // Without add_srgb_suffix() the image we will be working with
                 // might not be "gamma correct".
-                format: Some(self.surface_format.add_srgb_suffix()),
+                format: Some(self.surface_config.format.add_srgb_suffix()),
                 ..Default::default()
             });
 
@@ -296,8 +304,14 @@ impl State {
         surface_texture.present();
     }
 
+    pub fn get_triangulations_len(&self) -> usize {
+        self.triangulations.len()
+    }
+
     fn set_vertices_and_indices(&mut self) {
-        let (vertices, mut indices) = generate_circle(&self.current_triangulation, self.get_num_vertices(), Self::get_radius());
+        let (triangulation_type, vertices, mut indices) = self.triangulations[self.current_triangulation_index].clone();
+
+        info!("{triangulation_type:?}: num_vertices {}", vertices.len());
         indices.reverse();
 
         self.current_triangulation_stats = get_triangulation_statistics(&vertices, &indices);
@@ -316,38 +330,29 @@ impl State {
         self.index_buffer.1 = indices.len() as u32;
     }
 
-    pub fn change_to_next_triangulation(&mut self) {
-        self.current_triangulation.next();
-        println!("Now showing triangulation {:?}.", self.current_triangulation);
-
+    pub fn set_triangulation(&mut self, index: usize) {
+        self.current_triangulation_index = index;
         self.set_vertices_and_indices();
     }
 
-    pub fn set_triangulation(&mut self, triangulation_type: TriangulationType) {
-        self.current_triangulation = triangulation_type;
-        println!("Now showing triangulation {:?}.", self.current_triangulation);
-
-        self.set_vertices_and_indices();
-    }
-
-    pub fn step_up_num_vertices(&mut self) {
-        self.num_vertex_calculator_value += 1;
-        self.set_vertices_and_indices();
-        println!("Now drawing {} vertices.", self.get_num_vertices());
-    }
-
-    pub fn get_next_num_vertices(&self) -> usize {
-        self.num_vertex_calculator.get_num_vertices(self.num_vertex_calculator_value)
-    }
-
-    pub fn step_down_num_vertices(&mut self) {
-        if self.num_vertex_calculator_value <= 1 {
-            println!("Cannot have less than 3 vertices!");
-            return;
+    /// Returns true if we are on the last triangulation
+    pub fn next_triangulation(&mut self) -> bool {
+        let mut reset = false;
+        self.current_triangulation_index += 1;
+        if self.current_triangulation_index >= self.triangulations.len() {
+            reset = true;
+            self.current_triangulation_index = 0;
         }
-        self.num_vertex_calculator_value -= 1;
         self.set_vertices_and_indices();
-        println!("Now drawing {} vertices.", self.get_num_vertices());
+        reset
+    }
+
+    pub fn get_num_vertices(&self) -> usize {
+        self.triangulations[self.current_triangulation_index].1.len()
+    }
+
+    pub fn get_triangulation_type(&self) -> TriangulationType {
+        self.triangulations[self.current_triangulation_index].0.clone()
     }
 
     pub fn toggle_full_screen(&mut self) {
@@ -355,42 +360,12 @@ impl State {
         self.recreate_pipeline();
     }
 
-    pub fn get_num_vertices(&self) -> usize {
-        Self::calculate_num_vertices(self.num_vertex_calculator, self.num_vertex_calculator_value)
-    }
-
-    fn calculate_num_vertices(vertex_num_type: NumVerticesCalculator, vertices_power: u32) -> usize {
-        vertex_num_type.get_num_vertices(vertices_power)
-    }
-
-    fn get_radius() -> f32 {
-        0.75
-    }
-
-    pub fn get_triangulation_type(&self) -> TriangulationType {
-        self.current_triangulation.clone()
-    }
-
-    pub fn get_vertex_calculator_value(&self) -> u32 {
-        self.num_vertex_calculator_value
-    }
-
     pub fn get_current_triangulation_statistics(&self) -> TriangulationStatistics {
         self.current_triangulation_stats.clone()
     }
 
-    fn get_default_triangulation() -> (NumVerticesCalculator, u32, TriangulationType) {
-        DEFAULT_TRIANGULATION
-    }
-
     pub fn reset_to_default_triangulation(&mut self) {
-        let (c, n, t) = Self::get_default_triangulation();
-
-        self.num_vertex_calculator_value = n;
-        self.current_triangulation = t;
-        self.num_vertex_calculator = c;
-
-        self.set_vertices_and_indices();
+        self.set_triangulation(0);
     }
 
     pub fn get_window_size(&self) -> (u32, u32) {
@@ -404,6 +379,7 @@ pub struct App {
     proxy: Option<winit::event_loop::EventLoopProxy<State>>,
     state: Option<State>,
     data_gathering: Option<GatherData>,
+    window: Option<Arc<Window>>,
 }
 
 impl App {
@@ -413,6 +389,7 @@ impl App {
         Self {
             state: None,
             data_gathering: None,
+            window: None,
             #[cfg(target_arch = "wasm32")]
             proxy,
         }
@@ -439,27 +416,11 @@ impl ApplicationHandler<State> for App {
         }
 
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
+        self.window = Some(window.clone());
 
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.state = Some(pollster::block_on(State::new(window)).unwrap());
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            if let Some(proxy) = self.proxy.take() {
-                wasm_bindgen_futures::spawn_local(async move {
-                    assert!(
-                        proxy
-                            .send_event(
-                                State::new(window)
-                                    .await
-                                    .expect("Unable to create canvas!")
-                            )
-                            .is_ok()
-                    )
-                });
-            }
         }
     }
 
@@ -469,8 +430,7 @@ impl ApplicationHandler<State> for App {
         {
             event.window.request_redraw();
             event.resize(
-                event.window.inner_size().width,
-                event.window.inner_size().height,
+                event.window.inner_size(),
             );
         }
         self.state = Some(event);
@@ -483,6 +443,25 @@ impl ApplicationHandler<State> for App {
         event: winit::event::WindowEvent,
     )
     {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let WindowEvent::Resized(size) = event && self.state.is_none() && size.width > 0 && size.height > 0 && let Some(window) = self.window.clone() {
+                if let Some(proxy) = self.proxy.take() {
+                    wasm_bindgen_futures::spawn_local(async move {
+                        assert!(
+                            proxy
+                                .send_event(
+                                    State::new(window)
+                                        .await
+                                        .expect("Unable to create canvas!")
+                                )
+                                .is_ok()
+                        )
+                    });
+                }
+            }
+        }
+
         let state = match &mut self.state {
             Some(canvas) => canvas,
             None => return,
@@ -504,14 +483,9 @@ impl ApplicationHandler<State> for App {
                 ..
             }, .. } => match (code, key_state.is_pressed()) {
                 (KeyCode::Escape, true) => event_loop.exit(),
-                (KeyCode::ArrowRight, true) => state.change_to_next_triangulation(),
-                (KeyCode::ArrowDown, true) => state.step_down_num_vertices(),
-                (KeyCode::ArrowUp, true) => state.step_up_num_vertices(),
+                (KeyCode::ArrowRight, true) => {let _ = state.next_triangulation();},
+                (KeyCode::KeyS, true) => self.data_gathering = Some(GatherData::new(state)),
                 (KeyCode::KeyF, true) => state.toggle_full_screen(),
-                // (KeyCode::KeyO, true) => {
-                //     println!("WARNING: It will read the whole file of the stored triangulations for every time it switches between triangulations!");
-                //     self.data_gathering = Some(GatherData::new(state, DataGatherType::TriangulationsFromFile(pollster::block_on(rfd::AsyncFileDialog::new().pick_file()).expect("Expected a file to be picked!"))))
-                // }
                 _ => {}
             },
             _ => {}
