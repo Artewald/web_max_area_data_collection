@@ -249,6 +249,7 @@ pub fn generate_random_triangles_in_buckets(min_edge_length: f32, max_edge_lengt
                     lock.retain(|(_, num_items)| *num_items > 0);
                     if i == 0 {
                         println!("Remaining buckets = {}", lock.len());
+                        dbg!(&lock);
                     }
                 }
             }

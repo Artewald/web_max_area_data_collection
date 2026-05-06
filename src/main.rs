@@ -12,15 +12,15 @@ fn main() {
     // read_triangulation_from_file();
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn read_triangulation_from_file() {
-    let bin_data = include_bytes!("triangulation_data.bin");
-    let data: Vec<(Vec<Vertex>, Vec<u32>)> = postcard::from_bytes(bin_data).unwrap();
-    dbg!(data.len());
-    let bin_data = include_bytes!("triangulation_data.bin");
-    let data: Vec<(Vec<Vertex>, Vec<u32>)> = postcard::from_bytes(bin_data).unwrap();
-    dbg!(data.len());
-}
+// #[cfg(not(target_arch = "wasm32"))]
+// fn read_triangulation_from_file() {
+//     let bin_data = include_bytes!("triangulation_data.bin");
+//     let data: Vec<(Vec<Vertex>, Vec<u32>)> = postcard::from_bytes(bin_data).unwrap();
+//     dbg!(data.len());
+//     let bin_data = include_bytes!("triangulation_data.bin");
+//     let data: Vec<(Vec<Vertex>, Vec<u32>)> = postcard::from_bytes(bin_data).unwrap();
+//     dbg!(data.len());
+// }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn create_triangulation_file() {
@@ -43,7 +43,7 @@ fn create_triangulation_file() {
     let data = postcard::to_allocvec(&data).unwrap();
     write("./src/fan_stripe_max_area.bin", data).unwrap();
 
-    let data = generate_random_triangles_in_buckets(200.0, 500_000.0, 10, 10, 0.75, 2_097_152);
+    let data = generate_random_triangles_in_buckets(200.0, 500_000.0, 10, 10, 0.75, 262_144);
     let data = postcard::to_allocvec(&data).unwrap();
-    write("./src/random_triangulations_262145.bin", data).unwrap();
+    write("./src/random_triangulations_262_144.bin", data).unwrap();
 }
