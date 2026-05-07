@@ -1,2 +1,5 @@
 # NOTE
 This project was only tested when building to wasm. There is no guarantee that it will work natively
+
+# Build
+Building can be done using the command `wasm-pack build --release --target web`.

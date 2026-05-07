@@ -6,7 +6,7 @@ use wasm_bindgen::prelude::*;
 use wgpu::util::DeviceExt;
 #[cfg(target_arch = "wasm32")]
 use winit::platform::web::EventLoopExtWebSys;
-use winit::{application::ApplicationHandler, dpi::PhysicalSize, event::{ElementState, KeyEvent, MouseButton, WindowEvent}, event_loop::EventLoop, keyboard::{KeyCode, PhysicalKey}, window::Window};
+use winit::{application::ApplicationHandler, dpi::PhysicalSize, event::{ElementState, KeyEvent, MouseButton, Touch, WindowEvent}, event_loop::EventLoop, keyboard::{KeyCode, PhysicalKey}, window::Window};
 
 use crate::{gather_data::GatherData, metrics::{TriangulationStatistics, get_triangulation_statistics}, vertex::{TriangulationType, Vertex}};
 
@@ -505,11 +505,13 @@ impl ApplicationHandler<State> for App {
             WindowEvent::MouseInput { state: button_state, button, .. } => {
                 match (button, button_state) {
                     (MouseButton::Left, ElementState::Pressed) => {
-                        info!("Left mouse button pressed!");
                         self.data_gathering = Some(GatherData::new(state));
                     },
                     _ => {}
                 }
+            },
+            WindowEvent::Touch(_) => {
+                self.data_gathering = Some(GatherData::new(state));
             },
             _ => {}
         }

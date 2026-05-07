@@ -10,8 +10,8 @@ use serde::{ser::SerializeStruct, Serialize, Serializer};
 
 use crate::{metrics::TriangulationStatistics, State, vertex::{TriangulationType, Vertex}};
 
-pub const WARMUP_MS: i64 = 1;// * 1000;
-pub const DATA_GATHER_MS: i64 = 1;// * 1000;
+pub const WARMUP_MS: i64 = 5 * 1000;
+pub const DATA_GATHER_MS: i64 = 5 * 1000;
 
 
 #[derive(Debug, Clone, Serialize)]
