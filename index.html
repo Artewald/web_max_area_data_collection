@@ -5,7 +5,7 @@
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Learn WGPU</title>
+    <title>Max area data collection</title>
     <style>
       * {
         padding: 0;
@@ -13,16 +13,25 @@
       }
       canvas {
         background-color: black;
-        width: 100%;
-        height: 100%;
+        width: 1920px !important;
+        height: 1080px !important;
+        min-width: 1920px;
+        max-width: 1920px;
+        min-height: 1080px;
+        max-height: 1080px;
       }
     </style>
   </head>
 
   <body id="wasm-example">
-    <canvas id="canvas"></canvas>
+    <div style="width:100%; overflow: auto;">
+        <canvas id="canvas" width="1920" height="1080" style="width: 1920px; height: 1080px;"></canvas>
+    </div>
     <script type="module">
       import init from "./pkg/web_max_area_data_collection.js";
+      const canvas = document.getElementById('canvas');
+      canvas.width = 1920;
+      canvas.height = 1080;
       init().then(() => {
         console.log("WASM Loaded");
       });

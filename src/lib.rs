@@ -6,7 +6,7 @@ use wasm_bindgen::prelude::*;
 use wgpu::util::DeviceExt;
 #[cfg(target_arch = "wasm32")]
 use winit::platform::web::EventLoopExtWebSys;
-use winit::{application::ApplicationHandler, dpi::PhysicalSize, event::{KeyEvent, WindowEvent}, event_loop::EventLoop, keyboard::{KeyCode, PhysicalKey}, window::Window};
+use winit::{application::ApplicationHandler, dpi::PhysicalSize, event::{ElementState, KeyEvent, MouseButton, WindowEvent}, event_loop::EventLoop, keyboard::{KeyCode, PhysicalKey}, window::Window};
 
 use crate::{gather_data::GatherData, metrics::{TriangulationStatistics, get_triangulation_statistics}, vertex::{TriangulationType, Vertex}};
 
@@ -21,6 +21,7 @@ pub struct State {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
     device: wgpu::Device,
+    gpu_name: String,
     queue: wgpu::Queue,
     size: winit::dpi::PhysicalSize<u32>,
     surface: wgpu::Surface<'static>,
@@ -54,6 +55,8 @@ impl State {
         if size.width <= 0 && size.height <= 0 {
             panic!("Window size is 0");
         }
+
+        let size = PhysicalSize { width: 1920, height: 1080 };
 
         let surface = instance.create_surface(window.clone())?;
 
@@ -120,6 +123,7 @@ impl State {
         let state = State {
             window,
             device,
+            gpu_name: adapter_info.name,
             queue,
             size,
             surface,
@@ -225,7 +229,7 @@ impl State {
         self.surface = surface;
         self.surface_config = surface_config;
         self.render_pipeline = render_pipeline;
-        self.size = self.window.inner_size();
+        self.size = PhysicalSize { width: 1920, height: 1080 };//self.window.inner_size();
         self.is_surface_configured = false;
     }
 
@@ -237,9 +241,10 @@ impl State {
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         self.size = new_size;
 
-        if new_size.width > 0 && new_size.height > 0 {
-            self.surface_config.width = new_size.width;
-            self.surface_config.height = new_size.height;
+        if self.size.width > 0 && self.size.height > 0 {
+            self.size = PhysicalSize { width: 1920, height: 1080 };
+            self.surface_config.width = self.size.width;
+            self.surface_config.height = self.size.height;
             self.surface.configure(&self.device, &self.surface_config);
             self.is_surface_configured = true;
         }
@@ -343,6 +348,7 @@ impl State {
             reset = true;
             self.current_triangulation_index = 0;
         }
+        info!("{} of {}", self.current_triangulation_index, self.triangulations.len());
         self.set_vertices_and_indices();
         reset
     }
@@ -368,9 +374,17 @@ impl State {
         self.set_triangulation(0);
     }
 
+    pub fn get_gpu_name(&self) -> String {
+        self.gpu_name.clone()
+    }
+
     pub fn get_window_size(&self) -> (u32, u32) {
         let size = self.window.inner_size();
         (size.width, size.height)
+    }
+
+    pub fn get_render_size(&self) -> (u32, u32) {
+        (self.size.width, self.size.height)
     }
 }
 
@@ -484,9 +498,18 @@ impl ApplicationHandler<State> for App {
             }, .. } => match (code, key_state.is_pressed()) {
                 (KeyCode::Escape, true) => event_loop.exit(),
                 (KeyCode::ArrowRight, true) => {let _ = state.next_triangulation();},
-                (KeyCode::KeyS, true) => self.data_gathering = Some(GatherData::new(state)),
+                // (KeyCode::KeyS, true) => self.data_gathering = Some(GatherData::new(state)),
                 (KeyCode::KeyF, true) => state.toggle_full_screen(),
                 _ => {}
+            },
+            WindowEvent::MouseInput { state: button_state, button, .. } => {
+                match (button, button_state) {
+                    (MouseButton::Left, ElementState::Pressed) => {
+                        info!("Left mouse button pressed!");
+                        self.data_gathering = Some(GatherData::new(state));
+                    },
+                    _ => {}
+                }
             },
             _ => {}
         }

@@ -1,5 +1,7 @@
 use std::fs::{read_to_string, write};
 
+use chrono::{DateTime, Local};
+use log::{info, warn};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
@@ -8,9 +10,8 @@ use serde::{ser::SerializeStruct, Serialize, Serializer};
 
 use crate::{metrics::TriangulationStatistics, State, vertex::{TriangulationType, Vertex}};
 
-pub const WARMUP_MS: u128 = 1 * 1000;
-pub const DATA_GATHER_MS: u128 = 1 * 1000;
-pub const MAX_VERTEX_NUM: usize = 2_usize.pow(18);
+pub const WARMUP_MS: i64 = 1;// * 1000;
+pub const DATA_GATHER_MS: i64 = 1;// * 1000;
 
 
 #[derive(Debug, Clone, Serialize)]
@@ -26,7 +27,7 @@ pub struct InformationGathered {
     pub triangulation_type: TriangulationType,
     pub num_vertices: usize,
     pub num_frames: usize,
-    pub total_time_ms: u128,
+    pub total_time_ms: u64,
     pub frame_width: u32,
     pub frame_height: u32,
     pub metrics: TriangulationStatistics,
@@ -92,7 +93,7 @@ impl InformationGathered {
 }
 
 pub struct GatherData {
-    timer: Option<std::time::Instant>,
+    timer: Option<DateTime<Local>>,
     gathered_data: Vec::<InformationGathered>,
     current_information_gathered: InformationGathered,
     stage: DataCollectionStage,
@@ -119,24 +120,24 @@ impl GatherData {
             },
             DataCollectionStage::Warmup => {
                 if let Some(timer) = self.timer {
-                    if timer.elapsed().as_millis() >= WARMUP_MS {
+                    let elapsed = Local::now()-timer;
+                    if elapsed.num_milliseconds().abs() >= WARMUP_MS {
                         self.stage = DataCollectionStage::Active;
                         self.timer = None;
-                        state.set_triangulation(0);
                     }
                 } else {
-                    self.timer = Some(std::time::Instant::now());
+                    self.timer = Some(Local::now());
                 }
             },
             DataCollectionStage::Active => {
                 if let Some(timer) = self.timer {
                     self.current_information_gathered.num_frames += 1;
-                    let elapsed_ms = timer.elapsed().as_millis();
+                    let elapsed_ms = (Local::now() - timer).num_milliseconds().abs();
                     if elapsed_ms >= DATA_GATHER_MS {
                         self.stage = DataCollectionStage::Inactive;
                         self.timer = None;
 
-                        self.current_information_gathered.total_time_ms = elapsed_ms;
+                        self.current_information_gathered.total_time_ms = u64::try_from(elapsed_ms).unwrap();
 
                         let finished = state.next_triangulation();
 
@@ -146,11 +147,20 @@ impl GatherData {
                         self.gathered_data.push(data);
 
                         if finished {
+                            self.stage = DataCollectionStage::Finished;
                             let mut wtr = csv::Writer::from_writer(vec![]);
                             self.gathered_data.iter().for_each(|d| {
                                 wtr.serialize(d).unwrap();
                             });
-                            let data = wtr.into_inner().unwrap();
+                            let csv_bytes = &wtr.into_inner().unwrap();
+                            let csv_data = String::from_utf8_lossy(csv_bytes);
+                            let size = state.get_render_size();
+                            let gpu_name = state.get_gpu_name();
+
+                            let mut data = String::new();
+                            data += &format!("Name: {},\nResolution: {}x{},\n\n", gpu_name, size.0, size.1);
+                            data += &csv_data;
+                            let data = data.into_bytes();
                             #[cfg(not(target_arch = "wasm32"))]
                             {
                                 rfd::FileDialog::new().save_file().and_then(|p| write(p, data).ok()).unwrap();
@@ -161,7 +171,7 @@ impl GatherData {
                                     async move {
                                         use rfd::AsyncFileDialog;
 
-                                        let file_handle = AsyncFileDialog::new().save_file().await.unwrap_throw();
+                                        let file_handle = AsyncFileDialog::new().set_file_name("rendering_metrics.csv").save_file().await.unwrap_throw();
                                         file_handle.write(&data).await.unwrap_throw();
                                     }
                                 )
@@ -169,7 +179,7 @@ impl GatherData {
                         }
                     }
                 } else {
-                    self.timer = Some(std::time::Instant::now());
+                    self.timer = Some(Local::now());
                 }
             },
             DataCollectionStage::Finished => (),
