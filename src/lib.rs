@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use chrono::{DateTime, Local};
 use log::info;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -39,10 +40,9 @@ pub struct State {
 
 impl State {
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
-
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             #[cfg(not(target_arch = "wasm32"))]
-            backends: wgpu::Backends::PRIMARY,
+            backends: wgpu::Backends::VULKAN,
             #[cfg(target_arch = "wasm32")]
             backends: wgpu::Backends::GL,
             flags: Default::default(),
@@ -50,12 +50,14 @@ impl State {
             backend_options: Default::default(),
         });
 
+
         let size = window.inner_size();
 
         if size.width <= 0 && size.height <= 0 {
             panic!("Window size is 0");
         }
 
+        #[cfg(target_arch="wasm32")]
         let size = PhysicalSize { width: 1920, height: 1080 };
 
         let surface = instance.create_surface(window.clone())?;
@@ -71,8 +73,11 @@ impl State {
         info!("Using device {:?}", adapter_info.name);
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
-                label: None,
+                label: Some("Requesting device"),
+                #[cfg(target_arch = "wasm32")]
                 required_features: wgpu::Features::empty(),//::from_name("POLYGON_MODE_LINE").unwrap(),
+                #[cfg(not(target_arch = "wasm32"))]
+                required_features: wgpu::Features::from_name("POLYGON_MODE_LINE").unwrap(),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 required_limits: if cfg!(target_arch = "wasm32") {
                     wgpu::Limits::downlevel_webgl2_defaults()
@@ -83,7 +88,6 @@ impl State {
                 trace: wgpu::Trace::Off,
             })
             .await?;
-
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
@@ -98,13 +102,19 @@ impl State {
 
         let (surface_config, render_pipeline) = Self::get_pipeline(&size, &surface, &adapter, &device, &render_pipeline_layout, &shader);
 
+        #[cfg(target_arch = "wasm32")]
         let bin_data = include_bytes!("fan_stripe_max_area.bin");
+        #[cfg(not(target_arch = "wasm32"))]
+        let bin_data = &std::fs::read("./src/fan_stripe_max_area.bin").unwrap();
         let mut data: Vec<(TriangulationType, Vec<Vertex>, Vec<u32>)> = postcard::from_bytes(bin_data).unwrap();
+        #[cfg(target_arch = "wasm32")]
         let bin_data = include_bytes!("random_triangulations_262_144.bin");
+        #[cfg(not(target_arch = "wasm32"))]
+        let bin_data = &std::fs::read("./src/random_triangulations_262_144.bin").unwrap();
         let mut data_2: Vec<(TriangulationType, Vec<Vertex>, Vec<u32>)> = postcard::from_bytes(bin_data).unwrap();
         data.append(&mut data_2);
         let (_, vertices, mut indices) = data[0].clone();
-        indices.reverse();
+        indices.chunks_exact_mut(3).for_each(|c| c.reverse());
 
         let current_triangulation_stats = get_triangulation_statistics(&vertices, &indices);
 
@@ -194,6 +204,9 @@ impl State {
                 cull_mode: None,//Some(wgpu::Face::Back),
                 // Requires Features::DEPTH_CLIP_CONTROL
                 unclipped_depth: false,
+                #[cfg(target_arch = "wasm32")]
+                polygon_mode: wgpu::PolygonMode::Fill,
+                #[cfg(not(target_arch = "wasm32"))]
                 polygon_mode: wgpu::PolygonMode::Fill,
                 // Requires Features::CONSERVATIVE_RASTERIZATION
                 conservative: false,
@@ -229,7 +242,14 @@ impl State {
         self.surface = surface;
         self.surface_config = surface_config;
         self.render_pipeline = render_pipeline;
-        self.size = PhysicalSize { width: 1920, height: 1080 };//self.window.inner_size();
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.size = PhysicalSize { width: 1920, height: 1080 };//self.window.inner_size();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.size = self.window.inner_size();
+        }
         self.is_surface_configured = false;
     }
 
@@ -242,7 +262,10 @@ impl State {
         self.size = new_size;
 
         if self.size.width > 0 && self.size.height > 0 {
-            self.size = PhysicalSize { width: 1920, height: 1080 };
+            #[cfg(target_arch = "wasm32")]
+            {
+                self.size = PhysicalSize { width: 1920, height: 1080 };
+            }
             self.surface_config.width = self.size.width;
             self.surface_config.height = self.size.height;
             self.surface.configure(&self.device, &self.surface_config);
@@ -282,7 +305,7 @@ impl State {
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
             let mut renderpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
+                label: Some("Forward pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &texture_view,
                     depth_slice: None,
@@ -317,7 +340,7 @@ impl State {
         let (triangulation_type, vertices, mut indices) = self.triangulations[self.current_triangulation_index].clone();
 
         info!("{triangulation_type:?}: num_vertices {}", vertices.len());
-        indices.reverse();
+        indices.chunks_exact_mut(3).for_each(|c| c.reverse());
 
         self.current_triangulation_stats = get_triangulation_statistics(&vertices, &indices);
 
@@ -344,13 +367,19 @@ impl State {
     pub fn next_triangulation(&mut self) -> bool {
         let mut reset = false;
         self.current_triangulation_index += 1;
-        if self.current_triangulation_index >= self.triangulations.len() {
+        if self.current_triangulation_index >= self.triangulations.len() {//|| self.current_triangulation_index >= 48 {
             reset = true;
             self.current_triangulation_index = 0;
         }
         info!("{} of {}", self.current_triangulation_index, self.triangulations.len());
         self.set_vertices_and_indices();
         reset
+    }
+
+    pub fn prev_triangulation(&mut self) {
+        self.current_triangulation_index = self.current_triangulation_index.checked_sub(1).unwrap_or(self.triangulations.len()-1);
+        info!("{} of {}", self.current_triangulation_index, self.triangulations.len());
+        self.set_vertices_and_indices();
     }
 
     pub fn get_num_vertices(&self) -> usize {
@@ -394,6 +423,8 @@ pub struct App {
     state: Option<State>,
     data_gathering: Option<GatherData>,
     window: Option<Arc<Window>>,
+    timer: DateTime<Local>,
+    frame_counter: usize,
 }
 
 impl App {
@@ -404,6 +435,8 @@ impl App {
             state: None,
             data_gathering: None,
             window: None,
+            timer: Local::now(),
+            frame_counter: 0,
             #[cfg(target_arch = "wasm32")]
             proxy,
         }
@@ -434,6 +467,7 @@ impl ApplicationHandler<State> for App {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
+            println!("Creating new state!");
             self.state = Some(pollster::block_on(State::new(window)).unwrap());
         }
     }
@@ -490,6 +524,7 @@ impl ApplicationHandler<State> for App {
                     gather_data.update(state);
                 };
                 state.get_window().request_redraw();
+                self.frame_counter += 1;
             },
             WindowEvent::KeyboardInput { event: KeyEvent {
                 physical_key: PhysicalKey::Code(code),
@@ -498,6 +533,7 @@ impl ApplicationHandler<State> for App {
             }, .. } => match (code, key_state.is_pressed()) {
                 (KeyCode::Escape, true) => event_loop.exit(),
                 (KeyCode::ArrowRight, true) => {let _ = state.next_triangulation();},
+                (KeyCode::ArrowLeft, true) => state.prev_triangulation(),
                 // (KeyCode::KeyS, true) => self.data_gathering = Some(GatherData::new(state)),
                 (KeyCode::KeyF, true) => state.toggle_full_screen(),
                 _ => {}
@@ -514,6 +550,16 @@ impl ApplicationHandler<State> for App {
                 self.data_gathering = Some(GatherData::new(state));
             },
             _ => {}
+        }
+        let elapsed_ms = (Local::now()-self.timer).num_milliseconds();
+        if  elapsed_ms >= 1_000 {
+            let fps = self.frame_counter as f64 / (elapsed_ms as f64 / 1_000.0);
+            let frame_time = elapsed_ms as f64 / self.frame_counter as f64;
+            let triangulation_type = state.get_triangulation_type();
+            let num_vertices = state.get_num_vertices();
+            state.window.set_title(&format!("{triangulation_type:?} - {num_vertices} | FPS: {fps:.2} | Frametime: {frame_time:.2}ms"));
+            self.timer = Local::now();
+            self.frame_counter = 0;
         }
     }
 }
@@ -533,6 +579,7 @@ pub fn run() -> anyhow::Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let mut app = App::new();
+        println!("App created!");
         event_loop.run_app(&mut app)?;
     }
 
