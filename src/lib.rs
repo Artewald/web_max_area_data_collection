@@ -49,7 +49,7 @@ pub struct State {
     current_triangulation_index: usize,
     render_texture: Texture,
     render_texture_view: TextureView,
-    pub render_data: Vec<Arc<Mutex<Option<i64>>>>,
+    pub render_data: Vec<Arc<Mutex<Option<f64>>>>,
 }
 
 impl State {
@@ -368,7 +368,6 @@ impl State {
         let time_before_encoder = Local::now();
         let data = Arc::new(Mutex::new(None));
         self.render_data.push(data.clone());
-        dbg!(self.render_data.len());
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
             let mut renderpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -394,18 +393,16 @@ impl State {
             renderpass.draw_indexed(0..self.index_buffer.1, 0, 0..1);
         }
 
-        // encoder.on_submitted_work_done(move || {
-        //     let time_passed = Local::now()-time_before_encoder;
-        //     let millis = time_passed.num_milliseconds().abs();
-        //     loop {
-        //         if let Ok(mut data) = data.try_lock() {
-        //             data.replace(millis);
-        //             break;
-        //         }
-        //     }
-        // });
+        encoder.on_submitted_work_done(move || {
+            let time_passed = Local::now()-time_before_encoder;
+            let millis = time_passed.num_microseconds().unwrap_or(i64::MAX).abs() as f64 / 1000.0;
+            data.lock().unwrap_or_else(|e| e.into_inner()).replace(millis);
+        });
 
         self.queue.submit([encoder.finish()]);
+
+        // Noop in wasm
+        self.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
 
         let present_texture = match self.surface.get_current_texture() {
             Ok(frame) => frame,
@@ -445,8 +442,8 @@ impl State {
 
         self.queue.submit([encoder.finish()]);
 
-        present_texture.present();
         self.window.pre_present_notify();
+        present_texture.present();
     }
 
     pub fn get_triangulations_len(&self) -> usize {
@@ -587,8 +584,6 @@ impl ApplicationHandler<State> for App {
         #[allow(unused_mut)]
         let mut window_attributes = Window::default_attributes();
 
-        event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-
         #[cfg(target_arch = "wasm32")]
         {
             use wasm_bindgen::JsCast;
@@ -703,7 +698,7 @@ impl ApplicationHandler<State> for App {
         if elapsed_ms >= 1_000 {
             dbg!(state.render_data.len());
             let data = state.render_data.clone().iter().flat_map(|v| v.lock().unwrap_or_else(|e| e.into_inner()).clone()).collect::<Vec<_>>();
-            let elapsed_ms = data.iter().map(|v| *v as f64).fold(0.0, |a, b| a+b).max(1e-7);
+            let elapsed_ms = data.iter().fold(0.0, |a, b| a+b).max(1e-7);
             let frame_counter = (data.len() as f64).max(1e-7);
             dbg!(frame_counter, elapsed_ms);
             let fps = frame_counter as f64 / (elapsed_ms as f64 / 1_000.0);

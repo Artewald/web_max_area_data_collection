@@ -13,8 +13,8 @@ use web_max_area_data_collection::{
 };
 
 fn main() {
-    #[cfg(not(target_arch = "wasm32"))]
-    create_triangulation_file();
+    // #[cfg(not(target_arch = "wasm32"))]
+    // create_triangulation_file();
     // #[cfg(not(target_arch = "wasm32"))]
     // read_triangulation_from_file();
     run().unwrap();
@@ -73,10 +73,10 @@ fn create_triangulation_file() {
     let data = postcard::to_allocvec(&data).unwrap();
     write("./src/fan_stripe_max_area.bin", data).unwrap();
 
-    // let data = generate_random_triangles_in_buckets(200.0, 500_000.0, 10, 10, 0.75, 262_144)
-    //     .into_iter()
-    //     .map(|(v, i)| (TriangulationType::Random, v, i))
-    //     .collect::<Vec<_>>();
-    // let data = postcard::to_allocvec(&data).unwrap();
-    // write("./src/random_triangulations_262_144.bin", data).unwrap();
+    let data = generate_random_triangles_in_buckets(200.0, 500_000.0, 10, 10, 0.75, 262_144)
+        .into_iter()
+        .map(|(v, i)| (TriangulationType::Random, v, i))
+        .collect::<Vec<_>>();
+    let data = postcard::to_allocvec(&data).unwrap();
+    write("./src/random_triangulations_262_144.bin", data).unwrap();
 }
