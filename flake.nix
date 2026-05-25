@@ -46,6 +46,8 @@
           pkgs.rust-analyzer
           pkgs.clippy
           pkgs.wgsl-analyzer
+          pkgs.wasm-pack
+          pkgs.lld
         ];
       in
       {

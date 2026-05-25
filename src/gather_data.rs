@@ -131,13 +131,20 @@ impl GatherData {
             },
             DataCollectionStage::Active => {
                 if let Some(timer) = self.timer {
-                    self.current_information_gathered.num_frames += 1;
                     let elapsed_ms = (Local::now() - timer).num_milliseconds().abs();
                     if elapsed_ms >= DATA_GATHER_MS {
                         self.stage = DataCollectionStage::Inactive;
                         self.timer = None;
 
-                        self.current_information_gathered.total_time_ms = u64::try_from(elapsed_ms).unwrap();
+                        let mut data = Vec::new();
+                        std::mem::swap(&mut state.render_data, &mut data);
+
+                        let data = state.render_data.clone().iter().flat_map(|v| v.lock().unwrap_or_else(|e| e.into_inner()).clone()).collect::<Vec<_>>();
+                        let elapsed_ms = data.iter().fold(0.0, |a, b| a+b).max(1e-7) as u64;
+                        let frame_counter = data.len();
+                        self.current_information_gathered.num_frames = frame_counter;
+                        self.current_information_gathered.total_time_ms = elapsed_ms;
+                        // self.current_information_gathered.total_time_ms = u64::try_from(elapsed_ms).unwrap();
 
                         let finished = state.next_triangulation();
 
