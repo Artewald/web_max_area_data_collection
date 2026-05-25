@@ -1,9 +1,14 @@
-use std::{collections::VecDeque, f32::consts::PI, fs::read_to_string, sync::{Arc, Mutex}};
+use std::{
+    collections::VecDeque,
+    f32::consts::PI,
+    fs::read_to_string,
+    sync::{Arc, Mutex},
+};
 
 use bytemuck::{Pod, Zeroable};
 use nalgebra_glm as glm;
 #[cfg(not(target_arch = "wasm32"))]
-use rand::{seq::IndexedRandom, Rng};
+use rand::{Rng, seq::IndexedRandom};
 #[cfg(not(target_arch = "wasm32"))]
 use rand_distr::{Beta, Distribution};
 use serde::{Deserialize, Serialize};
@@ -27,17 +32,23 @@ pub enum TriangulationType {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn generate_random_triangle(radius: f32, num_points: usize) -> (Vec<Vertex>, Vec<u32>) {
-    let vertices = calculate_circle_points(radius, num_points).into_iter().map(|v| Vertex { position: v, _padding: 0.0 }).collect::<Vec<_>>();
+    let vertices = calculate_circle_points(radius, num_points)
+        .into_iter()
+        .map(|v| Vertex {
+            position: v,
+            _padding: 0.0,
+        })
+        .collect::<Vec<_>>();
     let mut indices = Vec::new();
 
     let mut rng = rand::rng();
     let mut queue = VecDeque::new();
 
-    let s1 = rng.random_range(0..vertices.len()-2);
+    let s1 = rng.random_range(0..vertices.len() - 2);
     let s2 = {
-        let mut s = rng.random_range(s1..vertices.len()-1);
+        let mut s = rng.random_range(s1..vertices.len() - 1);
         while s == s1 {
-            s = rng.random_range(s1..vertices.len()-1);
+            s = rng.random_range(s1..vertices.len() - 1);
         }
         s
     };
@@ -62,7 +73,7 @@ fn generate_random_triangle(radius: f32, num_points: usize) -> (Vec<Vertex>, Vec
 
         let beta = Beta::new(edge_beta, edge_beta).unwrap();
         let t = beta.sample(&mut rng);
-        let i = (start + 1 + ((len-2) as f64 * t).round() as usize) % num_points;
+        let i = (start + 1 + ((len - 2) as f64 * t).round() as usize) % num_points;
 
         indices.append(&mut vec![start as u32, i as u32, end as u32]);
         push_valid_edge(start, i, &mut queue, num_points);
@@ -73,7 +84,7 @@ fn generate_random_triangle(radius: f32, num_points: usize) -> (Vec<Vertex>, Vec
 }
 
 fn push_valid_edge(a: usize, b: usize, q: &mut VecDeque<(usize, usize)>, num_points: usize) {
-    let (start, end) = if a < b { (a, b) } else { (a, b+num_points) };
+    let (start, end) = if a < b { (a, b) } else { (a, b + num_points) };
     if start.abs_diff(end) > 1 {
         q.push_back((start % num_points, end % num_points));
     }
@@ -81,11 +92,17 @@ fn push_valid_edge(a: usize, b: usize, q: &mut VecDeque<(usize, usize)>, num_poi
 
 pub fn generate_circle_type_one(radius: f32, num_points: usize) -> (Vec<Vertex>, Vec<u32>) {
     let points = calculate_circle_points(radius, num_points - 1);
-    let mut vertices = vec![Vertex { position: glm::Vec2::new(0.0, 0.0), _padding: 0.0}];
+    let mut vertices = vec![Vertex {
+        position: glm::Vec2::new(0.0, 0.0),
+        _padding: 0.0,
+    }];
     let mut indices = Vec::new();
 
     for point in points {
-        vertices.push(Vertex { position: point, _padding: 0.0});
+        vertices.push(Vertex {
+            position: point,
+            _padding: 0.0,
+        });
     }
 
     for i in 0..(num_points - 2) {
@@ -108,7 +125,10 @@ pub fn generate_circle_type_two(radius: f32, num_points: usize) -> (Vec<Vertex>,
     let mut indices = Vec::new();
 
     for point in points {
-        vertices.push(Vertex { position: point, _padding: 0.0});
+        vertices.push(Vertex {
+            position: point,
+            _padding: 0.0,
+        });
     }
 
     indices.push(0);
@@ -137,22 +157,29 @@ pub fn generate_circle_type_three(radius: f32, num_points: usize) -> (Vec<Vertex
     let mut indices = Vec::with_capacity(num_points * 3);
     let mut edge_queue = VecDeque::with_capacity(num_points);
 
-    let angles: Vec<f32> = match num_points % 3 {
-        0 => vec![0.0, 120.0, 240.0],
-        1 => vec![0.0, 90.0, 180.0, 270.0],
-        _ => vec![0.0, 60.0, 120.0, 180.0, 240.0, 300.0],
-    };
+    let angles: Vec<f32> = vec![0.0, 120.0, 240.0]; //match num_vertices % 3 {
+    //     0 => vec![0.0, 120.0, 240.0],
+    //     1 => vec![0.0, 90.0, 180.0, 270.0],
+    //     _ => vec![0.0, 60.0, 120.0, 180.0, 240.0, 300.0],
+    // };
 
-    let positions: Vec<_> = angles.iter()
+    let positions: Vec<_> = angles
+        .iter()
         .map(|&angle| {
             let rad = angle.to_radians();
-            glm::Vec2::new(rad.sin() * radius, rad.cos() * radius)
+            [rad.sin() * radius, rad.cos() * radius]
         })
         .collect();
-    vertices.push(Vertex { position: positions[0], _padding: 0.0 });
+    vertices.push(Vertex {
+        position: glm::Vec2::new(positions[0][0], positions[0][1]),
+        _padding: 0.0,
+    });
     for (i, &position) in positions.iter().enumerate().skip(1) {
-        vertices.push(Vertex { position, _padding: 0.0 });
-        if i+1 < positions.len() {
+        vertices.push(Vertex {
+            position: glm::Vec2::new(position[0], position[1]),
+            _padding: 0.0,
+        });
+        if i + 1 < positions.len() {
             indices.extend_from_slice(&[0, i as u32, (i + 1) as u32]);
         }
         edge_queue.push_back((i - 1, i));
@@ -164,7 +191,10 @@ pub fn generate_circle_type_three(radius: f32, num_points: usize) -> (Vec<Vertex
         let mut mid = mid_point(vertices[p1].position, vertices[p2].position);
         extend_to_circle(&mut mid, radius);
         let mid_index = vertices.len();
-        vertices.push(Vertex { position: mid, _padding: 0.0 });
+        vertices.push(Vertex {
+            position: mid,
+            _padding: 0.0,
+        });
         indices.extend_from_slice(&[p1 as u32, mid_index as u32, p2 as u32]);
         edge_queue.push_back((p1, mid_index));
         edge_queue.push_back((mid_index, p2));
@@ -183,27 +213,38 @@ fn extend_to_circle(p1: &mut glm::Vec2, radius: f32) {
 }
 
 fn calculate_circle_points(radius: f32, num_points: usize) -> Vec<glm::Vec2> {
-    (0..num_points).map(|i| {
-        let angle = i as f32 * 2.0 * PI / num_points as f32;
-        glm::Vec2::new(radius * angle.cos(), radius * angle.sin())
-    }).collect()
+    (0..num_points)
+        .map(|i| {
+            let angle = i as f32 * 2.0 * PI / num_points as f32;
+            glm::Vec2::new(radius * angle.cos(), radius * angle.sin())
+        })
+        .collect()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn generate_random_triangles_in_buckets(min_edge_length: f32, max_edge_length: f32, num_buckets: usize, num_items_in_buckets: usize, circle_radius: f32, num_points_in_circle: usize) -> Vec<(Vec<Vertex>, Vec<u32>)> {
-    let step_size = (max_edge_length-min_edge_length) / num_buckets as f32;
+pub fn generate_random_triangles_in_buckets(
+    min_edge_length: f32,
+    max_edge_length: f32,
+    num_buckets: usize,
+    num_items_in_buckets: usize,
+    circle_radius: f32,
+    num_points_in_circle: usize,
+) -> Vec<(Vec<Vertex>, Vec<u32>)> {
+    let step_size = (max_edge_length - min_edge_length) / num_buckets as f32;
     let bucket_size_and_remaining_count = Arc::new(Mutex::new({
         let mut data = Vec::with_capacity(num_buckets);
         for n in 0..num_buckets {
-            let bottom_value = min_edge_length + step_size*n as f32;
-            let top_value = min_edge_length + step_size*(n+1) as f32;
+            let bottom_value = min_edge_length + step_size * n as f32;
+            let top_value = min_edge_length + step_size * (n + 1) as f32;
             let value_range = bottom_value..top_value;
             data.push((value_range, num_items_in_buckets));
         }
         data
     }));
 
-    let triangulations = Arc::new(Mutex::new(Vec::with_capacity(num_buckets*num_items_in_buckets)));
+    let triangulations = Arc::new(Mutex::new(Vec::with_capacity(
+        num_buckets * num_items_in_buckets,
+    )));
 
     let num_cpus = num_cpus::get().checked_sub(1).unwrap_or(1);
     let mut handles = Vec::with_capacity(num_cpus);
@@ -214,18 +255,30 @@ pub fn generate_random_triangles_in_buckets(min_edge_length: f32, max_edge_lengt
         let triangulations_c = triangulations.clone();
         let handle = std::thread::spawn(move || {
             let i = i_c;
-            while !bucket_size_and_remaining_count_c.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
-                let (vertices, indices) = generate_random_triangle(circle_radius, num_points_in_circle);
+            while !bucket_size_and_remaining_count_c
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+            {
+                let (vertices, indices) =
+                    generate_random_triangle(circle_radius, num_points_in_circle);
                 let statistics = get_triangulation_statistics(&vertices, &indices);
 
                 {
-                    let mut lock = bucket_size_and_remaining_count_c.lock().unwrap_or_else(|e| e.into_inner());
-                    match &mut lock.iter_mut().filter(|(range, _)| range.contains(&statistics.edge_lengths.sum)).next() {
+                    let mut lock = bucket_size_and_remaining_count_c
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    match &mut lock
+                        .iter_mut()
+                        .filter(|(range, _)| range.contains(&statistics.edge_lengths.sum))
+                        .next()
+                    {
                         Some((_, num_items)) => {
-                            let mut triangulation_lock = triangulations_c.lock().unwrap_or_else(|e| e.into_inner());
+                            let mut triangulation_lock =
+                                triangulations_c.lock().unwrap_or_else(|e| e.into_inner());
                             triangulation_lock.push((vertices, indices));
                             *num_items -= 1;
-                        },
+                        }
                         None => (),
                     };
                     lock.retain(|(_, num_items)| *num_items > 0);
@@ -238,10 +291,14 @@ pub fn generate_random_triangles_in_buckets(min_edge_length: f32, max_edge_lengt
         handles.push(handle);
     }
 
-    handles.into_iter().for_each(|h| { let _ = h.join(); });
+    handles.into_iter().for_each(|h| {
+        let _ = h.join();
+    });
 
     match Arc::into_inner(triangulations) {
         Some(x) => x.into_inner().unwrap_or_else(|e| e.into_inner()),
-        None => panic!("The triangulations value is still most likely shared across multiple threads. This means that an assumption in the code is broken!"),
+        None => panic!(
+            "The triangulations value is still most likely shared across multiple threads. This means that an assumption in the code is broken!"
+        ),
     }
 }
