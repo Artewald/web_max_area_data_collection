@@ -25,6 +25,7 @@ use crate::{
 pub mod gather_data;
 pub mod metrics;
 pub mod vertex;
+pub mod no_surface;
 
 // Initial setup was done through the learn-wgpu tutorial on: https://sotrh.github.io/learn-wgpu/
 
@@ -41,6 +42,11 @@ pub struct State {
     is_surface_configured: bool,
     render_pipeline_layout: wgpu::PipelineLayout,
     render_pipeline: wgpu::RenderPipeline,
+    present_pipeline_layout: wgpu::PipelineLayout,
+    present_pipeline: wgpu::RenderPipeline,
+    present_bind_group_layout: wgpu::BindGroupLayout,
+    present_bind_group: wgpu::BindGroup,
+    sampler: wgpu::Sampler,
     shader: wgpu::ShaderModule,
     vertex_buffer: wgpu::Buffer,
     index_buffer: (wgpu::Buffer, u32),
@@ -105,10 +111,17 @@ impl State {
             })
             .await?;
 
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shader"),
+        let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Render shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
+
+        let present_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Present shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("present.wgsl").into()),
+        });
+
+        let surface_config = Self::configure_surface(&surface, &adapter, &device, &size);
 
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -117,13 +130,11 @@ impl State {
                 ..Default::default()
             });
 
-        let (surface_config, render_pipeline) = Self::get_pipeline(
-            &size,
-            &surface,
-            &adapter,
+        let render_pipeline = Self::get_render_pipeline(
+            &surface_config,
             &device,
             &render_pipeline_layout,
-            &shader,
+            &render_shader,
         );
 
         let extent = wgpu::Extent3d {
@@ -132,21 +143,49 @@ impl State {
             depth_or_array_layers: 1,
         };
 
-        let render_texture = device.create_texture(&wgpu::wgt::TextureDescriptor {
-            label: Some("Texture to render to!"),
-            size: extent.clone(),
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: surface_config.format.add_srgb_suffix(),
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
+        let (render_texture, render_texture_view) = Self::get_render_texture_and_view(&device, &surface_config, &extent);
 
-        let render_texture_view = render_texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(surface_config.format.add_srgb_suffix()),
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Present sampler"),
             ..Default::default()
         });
+
+        let present_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Present bing group layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                    count: None,
+                },
+            ],
+        });
+        let present_bind_group = Self::get_present_bind_group(&device, &present_bind_group_layout, &render_texture_view, &sampler);
+
+        let present_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Render Pipeline Layout"),
+                bind_group_layouts: &[&present_bind_group_layout],
+                ..Default::default()
+            });
+
+        let present_pipeline = Self::get_present_pipeline(
+            &surface_config,
+            &device,
+            &present_pipeline_layout,
+            &present_shader,
+        );
 
         #[cfg(target_arch = "wasm32")]
         let bin_data = include_bytes!("fan_stripe_max_area.bin");
@@ -190,8 +229,13 @@ impl State {
             index_buffer: (index_buffer, indices.len() as u32),
             instance,
             adapter,
-            shader,
+            shader: render_shader,
             render_pipeline_layout,
+            present_pipeline_layout,
+            present_pipeline,
+            present_bind_group_layout,
+            present_bind_group,
+            sampler,
             current_triangulation_stats,
             triangulations: data,
             current_triangulation_index: 0,
@@ -205,23 +249,17 @@ impl State {
         Ok(state)
     }
 
-    fn get_pipeline<'a>(
-        size: &PhysicalSize<u32>,
-        surface: &wgpu::Surface<'a>,
-        adapter: &wgpu::Adapter,
-        device: &wgpu::Device,
-        render_pipeline_layout: &wgpu::PipelineLayout,
-        shader: &wgpu::ShaderModule,
-    ) -> (wgpu::SurfaceConfiguration, wgpu::RenderPipeline) {
-        let caps = surface.get_capabilities(&adapter);
+    fn configure_surface(surface: &wgpu::Surface, adapter: &wgpu::Adapter, device: &wgpu::Device, size: &PhysicalSize<u32>) -> wgpu::SurfaceConfiguration {
+        let caps = surface.get_capabilities(adapter);
         let surface_format = caps
             .formats
             .iter()
             .find(|f| f.is_srgb())
             .copied()
             .unwrap_or(caps.formats[0]);
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
+        let surface_config = wgpu::SurfaceConfiguration {
+            // COPY_DST is not available in web
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,// | wgpu::TextureUsages::COPY_DST,
             format: surface_format,
             width: size.width,
             height: size.height,
@@ -230,8 +268,56 @@ impl State {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
-        surface.configure(device, &config);
+        surface.configure(&device, &surface_config);
+        surface_config
+    }
 
+    fn get_render_texture_and_view(device: &wgpu::Device, surface_config: &wgpu::SurfaceConfiguration, extent: &wgpu::Extent3d) -> (wgpu::Texture, wgpu::TextureView) {
+        let render_texture = device.create_texture(&wgpu::wgt::TextureDescriptor {
+            label: Some("Texture to render to!"),
+            size: extent.clone(),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: surface_config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+
+        let render_texture_view = render_texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(surface_config.format),
+            ..Default::default()
+        });
+
+        (render_texture, render_texture_view)
+    }
+
+    fn get_present_bind_group(device: &wgpu::Device, bind_group_layout: &wgpu::BindGroupLayout, render_texture_view: &wgpu::TextureView, sampler: &wgpu::Sampler) -> wgpu::BindGroup {
+        let present_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Present bindgroup"),
+            layout: bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&render_texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+        present_bind_group
+    }
+
+    fn get_render_pipeline<'a>(
+        surface_config: &wgpu::SurfaceConfiguration,
+        device: &wgpu::Device,
+        render_pipeline_layout: &wgpu::PipelineLayout,
+        shader: &wgpu::ShaderModule,
+    ) -> wgpu::RenderPipeline {
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
@@ -274,7 +360,7 @@ impl State {
                 entry_point: Some("fs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
+                    format: surface_config.format,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -283,22 +369,77 @@ impl State {
             multiview_mask: None,
         });
 
-        (config, render_pipeline)
+        render_pipeline
+    }
+
+    fn get_present_pipeline<'a>(
+        surface_config: &wgpu::SurfaceConfiguration,
+        device: &wgpu::Device,
+        render_pipeline_layout: &wgpu::PipelineLayout,
+        shader: &wgpu::ShaderModule,
+    ) -> wgpu::RenderPipeline {
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None, //Some(wgpu::Face::Back),
+                // Requires Features::DEPTH_CLIP_CONTROL
+                unclipped_depth: false,
+                #[cfg(target_arch = "wasm32")]
+                polygon_mode: wgpu::PolygonMode::Fill,
+                #[cfg(not(target_arch = "wasm32"))]
+                polygon_mode: wgpu::PolygonMode::Fill,
+                // Requires Features::CONSERVATIVE_RASTERIZATION
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_config.format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            cache: None,
+            multiview_mask: None,
+        });
+
+        render_pipeline
     }
 
     fn recreate_pipeline(&mut self) {
-        let surface = self.instance.create_surface(self.window.clone()).unwrap();
-        let (surface_config, render_pipeline) = Self::get_pipeline(
-            &self.window.inner_size(),
-            &surface,
-            &self.adapter,
+        self.surface = self.instance.create_surface(self.window.clone()).unwrap();
+        self.surface_config = Self::configure_surface(&self.surface, &self.adapter, &self.device, &self.window.inner_size());
+        self.render_pipeline = Self::get_render_pipeline(
+            &self.surface_config,
             &self.device,
             &self.render_pipeline_layout,
             &self.shader,
         );
-        self.surface = surface;
-        self.surface_config = surface_config;
-        self.render_pipeline = render_pipeline;
+        self.present_pipeline = Self::get_present_pipeline(
+            &self.surface_config,
+            &self.device,
+            &self.render_pipeline_layout,
+            &self.shader,
+        );
         #[cfg(target_arch = "wasm32")]
         {
             self.size = PhysicalSize {
@@ -339,21 +480,12 @@ impl State {
                 depth_or_array_layers: 1,
             };
 
-            self.render_texture = self.device.create_texture(&wgpu::wgt::TextureDescriptor {
-                label: Some("Texture to render to!"),
-                size: extent.clone(),
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: self.surface_config.format.add_srgb_suffix(),
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            });
+            let (render_texture, render_texture_view) = Self::get_render_texture_and_view(&self.device, &self.surface_config, &extent);
 
-            self.render_texture_view = self.render_texture.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(self.surface_config.format.add_srgb_suffix()),
-                ..Default::default()
-            });
+            self.render_texture = render_texture;
+            self.render_texture_view = render_texture_view;
+            let present_bind_group = Self::get_present_bind_group(&self.device, &self.present_bind_group_layout, &self.render_texture_view, &self.sampler);
+            self.present_bind_group = present_bind_group;
         }
     }
 
@@ -363,7 +495,6 @@ impl State {
         if !self.is_surface_configured {
             return;
         }
-
 
         let time_before_encoder = Local::now();
         let data = Arc::new(Mutex::new(None));
@@ -394,15 +525,19 @@ impl State {
         }
 
         encoder.on_submitted_work_done(move || {
-            let time_passed = Local::now()-time_before_encoder;
+            let time_passed = Local::now() - time_before_encoder;
             let millis = time_passed.num_microseconds().unwrap_or(i64::MAX).abs() as f64 / 1000.0;
-            data.lock().unwrap_or_else(|e| e.into_inner()).replace(millis);
+            data.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .replace(millis);
         });
 
         self.queue.submit([encoder.finish()]);
 
-        // Noop in wasm
-        self.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        }
 
         let present_texture = match self.surface.get_current_texture() {
             Ok(frame) => frame,
@@ -420,27 +555,49 @@ impl State {
             }
             Err(e) => panic!("Failed to get next swap chain texture: {e}"),
         };
-        // let present_view = present_texture
-        //     .texture
-        //     .create_view(&wgpu::TextureViewDescriptor {
-        //         // Without add_srgb_suffix() the image we will be working with
-        //         // might not be "gamma correct".
-        //         format: Some(self.surface_config.format.add_srgb_suffix()),
-        //         ..Default::default()
+        let present_view = present_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor {
+                // Without add_srgb_suffix() the image we will be working with
+                // might not be "gamma correct".
+                format: Some(self.surface_config.format),
+                ..Default::default()
+            });
+
+        // let mut encoder = self.device.create_command_encoder(&Default::default());
+        // // encoder.copy_texture_to_texture(
+        // //     self.render_texture.as_image_copy(),
+        // //     present_texture.texture.as_image_copy(),
+        // //     Extent3d {
+        // //         width: self.size.width,
+        // //         height: self.size.height,
+        // //         depth_or_array_layers: 1,
+        // //     },
+        // // );
+        // {
+        //     let mut renderpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        //         label: Some("Present pipeline!"),
+        //         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+        //             view: &present_view,
+        //             depth_slice: None,
+        //             resolve_target: None,
+        //             ops: wgpu::Operations {
+        //                 load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+        //                 store: wgpu::StoreOp::Store,
+        //             },
+        //         })],
+        //         depth_stencil_attachment: None,
+        //         timestamp_writes: None,
+        //         occlusion_query_set: None,
+        //         multiview_mask: None,
         //     });
 
-        let mut encoder = self.device.create_command_encoder(&Default::default());
-        encoder.copy_texture_to_texture(
-            self.render_texture.as_image_copy(),
-            present_texture.texture.as_image_copy(),
-            Extent3d {
-                width: self.size.width,
-                height: self.size.height,
-                depth_or_array_layers: 1,
-            },
-        );
+        //     renderpass.set_pipeline(&self.present_pipeline);
+        //     renderpass.set_bind_group(0, &self.present_bind_group, &[]);
+        //     renderpass.draw(0..4, 0..1);
+        // }
 
-        self.queue.submit([encoder.finish()]);
+        // self.queue.submit([encoder.finish()]);
 
         self.window.pre_present_notify();
         present_texture.present();
@@ -696,11 +853,16 @@ impl ApplicationHandler<State> for App {
         }
         let elapsed_ms = (Local::now() - self.timer).num_milliseconds();
         if elapsed_ms >= 1_000 {
-            dbg!(state.render_data.len());
-            let data = state.render_data.clone().iter().flat_map(|v| v.lock().unwrap_or_else(|e| e.into_inner()).clone()).collect::<Vec<_>>();
-            let elapsed_ms = data.iter().fold(0.0, |a, b| a+b).max(1e-7);
+            // dbg!(state.render_data.len());
+            let data = state
+                .render_data
+                .clone()
+                .iter()
+                .flat_map(|v| v.lock().unwrap_or_else(|e| e.into_inner()).clone())
+                .collect::<Vec<_>>();
+            let elapsed_ms = data.iter().fold(0.0, |a, b| a + b).max(1e-7);
             let frame_counter = (data.len() as f64).max(1e-7);
-            dbg!(frame_counter, elapsed_ms);
+            // dbg!(frame_counter, elapsed_ms);
             let fps = frame_counter as f64 / (elapsed_ms as f64 / 1_000.0);
             let frame_time = elapsed_ms as f64 / frame_counter as f64;
             let triangulation_type = state.get_triangulation_type();
@@ -745,7 +907,13 @@ pub fn run() -> anyhow::Result<()> {
 #[wasm_bindgen(start)]
 pub fn run_web() -> Result<(), wasm_bindgen::JsValue> {
     console_error_panic_hook::set_once();
-    run().unwrap_throw();
-
+    // run().unwrap_throw();
+    console_log::init_with_level(log::Level::Info).unwrap_throw();
+    info!("Starting data collection thread!");
+    wasm_bindgen_futures::spawn_local(
+        async {
+            crate::no_surface::collect_data().await.unwrap_throw();
+        }
+    );
     Ok(())
 }

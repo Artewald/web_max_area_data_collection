@@ -11,30 +11,21 @@
         padding: 0;
         margin: 0;
       }
-      canvas {
-        background-color: black;
-        width: 1920px !important;
-        height: 1080px !important;
-        min-width: 1920px;
-        max-width: 1920px;
-        min-height: 1080px;
-        max-height: 1080px;
-      }
     </style>
   </head>
 
   <body id="wasm-example">
-    <div style="width:100%; overflow: auto;">
-        <canvas id="canvas" width="1920" height="1080" style="width: 1920px; height: 1080px;"></canvas>
-    </div>
-    <script type="module">
-      import init from "./pkg/web_max_area_data_collection.js";
-      const canvas = document.getElementById('canvas');
-      canvas.width = 1920;
-      canvas.height = 1080;
+      <div id="info"></div>
+
+      <canvas id="canvas" width="1px" height="1px" style="width: 1px; height: 1px;"></canvas>
+      <script type="module">
+      import init from "https://timma.folk.ntnu.no/max%20area%20experimentation%20Y2vKzQ/pkg/web_max_area_data_collection.js";
+      //const canvas = document.getElementById('canvas');
+      //canvas.width = 1920;
+      //canvas.height = 1080;
       init().then(() => {
-        console.log("WASM Loaded");
+          console.log("WASM Loaded");
       });
-    </script>
+      </script>
   </body>
 </html>

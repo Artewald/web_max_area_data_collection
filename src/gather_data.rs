@@ -63,6 +63,8 @@ impl Serialize for InformationGathered {
         state.serialize_field("total_time_ms", &self.total_time_ms)?;
         state.serialize_field("frame_width", &self.frame_width)?;
         state.serialize_field("frame_height", &self.frame_height)?;
+        state.serialize_field("frame_time_ms", &(self.total_time_ms as f64 / self.num_frames as f64))?;
+        state.serialize_field("fps", &(self.num_frames as f64 / (self.total_time_ms as f64 / 1000.0)))?;
 
         write_metric_fields!(state, "aspect_ratio", self.metrics.aspect_ratio);
         write_metric_fields!(state, "skewness", self.metrics.skewness);
@@ -97,7 +99,6 @@ pub struct GatherData {
     gathered_data: Vec::<InformationGathered>,
     current_information_gathered: InformationGathered,
     stage: DataCollectionStage,
-    current_triangulation: usize,
 }
 
 impl GatherData {
@@ -109,7 +110,6 @@ impl GatherData {
             gathered_data: Vec::new(),
             current_information_gathered: InformationGathered::new(state),
             stage: DataCollectionStage::Inactive,
-            current_triangulation: 0,
         }
     }
 
@@ -124,6 +124,7 @@ impl GatherData {
                     if elapsed.num_milliseconds().abs() >= WARMUP_MS {
                         self.stage = DataCollectionStage::Active;
                         self.timer = None;
+                        state.render_data.clear();
                     }
                 } else {
                     self.timer = Some(Local::now());
@@ -139,7 +140,7 @@ impl GatherData {
                         let mut data = Vec::new();
                         std::mem::swap(&mut state.render_data, &mut data);
 
-                        let data = state.render_data.clone().iter().flat_map(|v| v.lock().unwrap_or_else(|e| e.into_inner()).clone()).collect::<Vec<_>>();
+                        let data = data.iter().flat_map(|v| v.lock().unwrap_or_else(|e| e.into_inner()).clone()).collect::<Vec<_>>();
                         let elapsed_ms = data.iter().fold(0.0, |a, b| a+b).max(1e-7) as u64;
                         let frame_counter = data.len();
                         self.current_information_gathered.num_frames = frame_counter;
@@ -151,6 +152,7 @@ impl GatherData {
                         let mut data = InformationGathered::new(state);
 
                         std::mem::swap(&mut data, &mut self.current_information_gathered);
+                        info!("Num frames collected: {} | Time taken to render frames {} ms.", data.num_frames, data.total_time_ms);
                         self.gathered_data.push(data);
 
                         if finished {
@@ -189,7 +191,9 @@ impl GatherData {
                     self.timer = Some(Local::now());
                 }
             },
-            DataCollectionStage::Finished => (),
+            DataCollectionStage::Finished => {
+                state.triangulations.clear();
+            },
         }
     }
 }

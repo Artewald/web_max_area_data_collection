@@ -1,3 +1,4 @@
+use log::info;
 #[cfg(not(target_arch = "wasm32"))]
 use rand::seq::SliceRandom;
 use std::fs::write;
@@ -6,10 +7,9 @@ use web_max_area_data_collection::vertex::{
     TriangulationType, generate_random_triangles_in_buckets,
 };
 use web_max_area_data_collection::{
-    run,
-    vertex::{
+    no_surface::collect_data, run, vertex::{
         Vertex, generate_circle_type_one, generate_circle_type_three, generate_circle_type_two,
-    },
+    }
 };
 
 fn main() {
@@ -17,7 +17,13 @@ fn main() {
     // create_triangulation_file();
     // #[cfg(not(target_arch = "wasm32"))]
     // read_triangulation_from_file();
-    run().unwrap();
+    // run().unwrap();
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        env_logger::init();
+        pollster::block_on(collect_data()).unwrap();
+    }
 }
 
 // #[cfg(not(target_arch = "wasm32"))]
@@ -34,7 +40,7 @@ fn main() {
 fn create_triangulation_file() {
     let vertex_power = 2_usize;
     let start_exponent = 8;
-    let end_exponent = 23;
+    let end_exponent = 21;
 
     let mut data = Vec::new();
     let mut rng = rand::rng();
