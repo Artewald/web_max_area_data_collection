@@ -79,10 +79,10 @@ fn create_triangulation_file() {
     let data = postcard::to_allocvec(&data).unwrap();
     write("./src/fan_stripe_max_area.bin", data).unwrap();
 
-    let data = generate_random_triangles_in_buckets(200.0, 500_000.0, 10, 10, 0.75, 262_144)
+    let data = generate_random_triangles_in_buckets(100.0, 100_000.0, 10, 10, 0.75, 65_536)
         .into_iter()
         .map(|(v, i)| (TriangulationType::Random, v, i))
         .collect::<Vec<_>>();
     let data = postcard::to_allocvec(&data).unwrap();
-    write("./src/random_triangulations_262_144.bin", data).unwrap();
+    write("./src/random_triangulations_65_536.bin", data).unwrap();
 }

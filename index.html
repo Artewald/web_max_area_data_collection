@@ -15,14 +15,18 @@
   </head>
 
   <body id="wasm-example">
-      <div id="info"></div>
+      <div id="info1">Waiting for relevant part of program to run.</div>
+      <div id="info2">Waiting for relevant part of program to run.</div>
+      <div id="info3">Waiting for relevant part of program to run.</div>
+      <div id="info4">Waiting for relevant part of program to run.</div>
 
       <canvas id="canvas" width="1px" height="1px" style="width: 1px; height: 1px;"></canvas>
       <script type="module">
-      import init from "https://timma.folk.ntnu.no/max%20area%20experimentation%20Y2vKzQ/pkg/web_max_area_data_collection.js";
-      //const canvas = document.getElementById('canvas');
-      //canvas.width = 1920;
-      //canvas.height = 1080;
+      window.addEventListener('error', (event) => {
+        const info = document.getElementById('info1');
+        info.innerText = event.error.toString();
+      });
+      import init from "/pkg/web_max_area_data_collection.js";
       init().then(() => {
           console.log("WASM Loaded");
       });

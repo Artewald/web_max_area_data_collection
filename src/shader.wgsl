@@ -10,7 +10,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     var y: f32 = frag_coord.y;
     var z: f32 = frag_coord.z;
 
-    for (var i = 0u; i < 250; i++) {
+    for (var i = 0u; i < 100; i++) {
         x = abs(tanh(sin((f32(i) + x) * cos(f32(i) - x))));
         y = abs(tanh(sin((f32(i) + y) * cos(f32(i) - y))));
         z = abs(tanh(sin((f32(i) + z) * cos(f32(i) - z))));

@@ -48,6 +48,7 @@
           pkgs.wgsl-analyzer
           pkgs.wasm-pack
           pkgs.lld
+          pkgs.miniserve
         ];
       in
       {
