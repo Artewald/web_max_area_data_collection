@@ -17,6 +17,43 @@ const WARMUP_MS: i64 = 5_000;
 const NUM_FRAMES_TO_CAPTURE: usize = 100;
 
 pub async fn collect_data() -> anyhow::Result<()> {
+    let adapter_info_gl_name = {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            #[cfg(not(target_arch = "wasm32"))]
+            backends: wgpu::Backends::VULKAN,
+            #[cfg(target_arch = "wasm32")]
+            backends: wgpu::Backends::GL,
+            flags: Default::default(),
+            memory_budget_thresholds: Default::default(),
+            backend_options: Default::default(),
+        });
+
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                #[cfg(not(target_arch = "wasm32"))]
+                compatible_surface: None,
+                #[cfg(target_arch = "wasm32")]
+                compatible_surface: Some(&{
+                    use wasm_bindgen::JsCast;
+                    use wgpu::SurfaceTarget;
+
+                    const CANVAS_ID: &str = "canvas";
+
+                    let window = wgpu::web_sys::window().unwrap_throw();
+                    let document = window.document().unwrap_throw();
+                    let canvas = document.get_element_by_id(CANVAS_ID).unwrap_throw();
+                    let html_canvas_elem = canvas.unchecked_into::<web_sys::HtmlCanvasElement>();
+                    let target_surface = SurfaceTarget::Canvas(html_canvas_elem);
+                    instance.create_surface(target_surface).unwrap()
+                }),
+                force_fallback_adapter: false,
+            })
+            .await?;
+
+        adapter.get_info().name
+    };
+
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         #[cfg(not(target_arch = "wasm32"))]
         backends: wgpu::Backends::VULKAN,
@@ -33,7 +70,8 @@ pub async fn collect_data() -> anyhow::Result<()> {
     instance.enumerate_adapters(wgpu::Backends::all()).await.iter().for_each(|a|
         {
             let i = a.get_info();
-            info!("Available adapter: {} | backend: {}", i.name, i.backend);
+            info!("{:?}", i);
+            // info!("Available adapter: {} | backend: {}", i.name, i.backend);
         }
     );
 
@@ -66,12 +104,15 @@ pub async fn collect_data() -> anyhow::Result<()> {
 
     let adapter_info = adapter.get_info();
     let gpu_info = if adapter_info.name.is_empty() {
-        String::from("Unable to get GPU name. Please write down your exact device model number/configuration and send it to me.")
+        format!("Using fallback info (from GL backend): {}. This might not be the same GPU as WebGPU has selected!", adapter_info_gl_name)
+        // format!("{:?}", adapter_info)
+        // format!("Vendor ID: {:#06x} | Device ID: {:#06x}.", adapter_info.vendor, adapter_info.device)
+        // String::from("Unable to get GPU information. Please write down the GPU name (row GL_RENDERER in the table) when you search for 'chrome://gpu' on any chrome based browser.")
     } else {
         adapter_info.name.clone()
     };
     drop(adapter_info);
-    info!("Using device: {:?}", gpu_info);
+    info!("Device info - {:?}", gpu_info);
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("Requesting device"),
