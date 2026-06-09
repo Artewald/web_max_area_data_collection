@@ -20,7 +20,7 @@ pub async fn collect_data() -> anyhow::Result<()> {
     let adapter_info_gl_name = {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             #[cfg(not(target_arch = "wasm32"))]
-            backends: wgpu::Backends::VULKAN,
+            backends: wgpu::Backends::PRIMARY,
             #[cfg(target_arch = "wasm32")]
             backends: wgpu::Backends::GL,
             flags: Default::default(),
@@ -53,10 +53,9 @@ pub async fn collect_data() -> anyhow::Result<()> {
 
         adapter.get_info().name
     };
-
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         #[cfg(not(target_arch = "wasm32"))]
-        backends: wgpu::Backends::VULKAN,
+        backends: wgpu::Backends::PRIMARY,
         #[cfg(target_arch = "wasm32")]
         backends: wgpu::Backends::BROWSER_WEBGPU,
         flags: Default::default(),
@@ -119,7 +118,7 @@ pub async fn collect_data() -> anyhow::Result<()> {
             #[cfg(target_arch = "wasm32")]
             required_features: wgpu::Features::TIMESTAMP_QUERY,//wgpu::Features::empty(), //::from_name("POLYGON_MODE_LINE").unwrap(),
             #[cfg(not(target_arch = "wasm32"))]
-            required_features: wgpu::Features::from_name("POLYGON_MODE_LINE").unwrap(),
+            required_features: wgpu::Features::from_name("POLYGON_MODE_LINE").unwrap() | wgpu::Features::TIMESTAMP_QUERY,
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             required_limits: if cfg!(target_arch = "wasm32") {
                 wgpu::Limits::downlevel_webgl2_defaults()
@@ -239,18 +238,18 @@ pub async fn collect_data() -> anyhow::Result<()> {
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    // #[cfg(target_arch = "wasm32")]
-    // let bin_data = include_bytes!("fan_stripe_max_area.bin");
-    // #[cfg(not(target_arch = "wasm32"))]
-    // let bin_data = &std::fs::read("./src/fan_stripe_max_area.bin").unwrap();
-    // let mut data: Vec<(TriangulationType, Vec<Vertex>, Vec<u32>)> =
-    //     postcard::from_bytes(bin_data).unwrap();
     #[cfg(target_arch = "wasm32")]
-    let bin_data = include_bytes!("random_triangulations_65_536.bin");
+    let bin_data = include_bytes!("fan_stripe_max_area.bin");
     #[cfg(not(target_arch = "wasm32"))]
-    let bin_data = &std::fs::read("./src/random_triangulations_65_536.bin").unwrap();
+    let bin_data = &std::fs::read("./src/fan_stripe_max_area.bin").unwrap();
     let mut data: Vec<(TriangulationType, Vec<Vertex>, Vec<u32>)> =
         postcard::from_bytes(bin_data).unwrap();
+    // #[cfg(target_arch = "wasm32")]
+    // let bin_data = include_bytes!("random_triangulations_65_536.bin");
+    // #[cfg(not(target_arch = "wasm32"))]
+    // let bin_data = &std::fs::read("./src/random_triangulations_65_536.bin").unwrap();
+    // let mut data: Vec<(TriangulationType, Vec<Vertex>, Vec<u32>)> =
+    //     postcard::from_bytes(bin_data).unwrap();
     // data.append(&mut data_2);
     let triangulations = data;
     info!("Triangulations loaded!");
@@ -389,6 +388,7 @@ pub async fn collect_data() -> anyhow::Result<()> {
             slice.map_async(wgpu::MapMode::Read, move |v| {
                 let _ = map_send.send(v);
             });
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
             if let Ok(Ok(_)) = map_recv.await {
                 let buf_view = slice.get_mapped_range();
                 let data: &[u8; 16] = buf_view.as_array().unwrap();

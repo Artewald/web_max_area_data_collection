@@ -21,6 +21,7 @@ fn main() {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
+        unsafe { std::env::set_var("RUST_LOG", "info"); }
         env_logger::init();
         pollster::block_on(collect_data()).unwrap();
     }

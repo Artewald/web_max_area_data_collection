@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    nixGL.url = "github:guibou/nixGL/refs/pull/218/merge";
+    nixGL.url = "github:guibou/nixGL/refs/pull/223/merge";
     nixGL.inputs.nixpkgs.follows = "nixpkgs";
   };
 
@@ -20,6 +20,7 @@
       let
         pkgs = import nixpkgs {
           inherit system;
+          config.allowUnfree = true;
         };
         lib = pkgs.lib;
         buildInputs = [
@@ -29,10 +30,10 @@
           pkgs.vulkan-loader
           pkgs.vulkan-validation-layers
           pkgs.vulkan-tools
-          pkgs.xorg.libX11
-          pkgs.xorg.libXcursor
-          pkgs.xorg.libXi
-          pkgs.xorg.libXrandr # x11 feature
+          pkgs.libX11
+          pkgs.libXcursor
+          pkgs.libXi
+          pkgs.libXrandr # x11 feature
           pkgs.libxkbcommon
           pkgs.wayland
           pkgs.mesa
@@ -49,6 +50,7 @@
           pkgs.wasm-pack
           pkgs.lld
           pkgs.miniserve
+          pkgs.nil
         ];
       in
       {
